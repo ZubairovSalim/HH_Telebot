@@ -28,6 +28,8 @@ query = {
 
 processes = {}
 
+keyboard1 = telebot.types.ReplyKeyboardMarkup(True)
+keyboard1.row('/start', '/stop')
 
 @bot.message_handler(commands=['start'])
 def start_message(message):
@@ -36,7 +38,7 @@ def start_message(message):
     session.add(new_row)
     session.commit()
     bot.send_message(message.chat.id, 'Привет, я hh bot! Могу помочь с поиском вакансии :)\n' +
-                     'Напиши ключевое слово: ')
+                     'Напиши ключевое слово: ', reply_markup=keyboard1)
 
 
 @bot.message_handler(commands=['stop'])
