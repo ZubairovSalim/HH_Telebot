@@ -3,6 +3,7 @@ import requests
 import time
 import config
 import databases
+import datetime
 from multiprocessing import Process
 from threading import Thread
 
@@ -19,12 +20,6 @@ databases.Base.metadata.create_all(bind=engine)
 Session = sessionmaker()
 Session.configure(bind=engine)
 session = Session()
-
-query = {
-    'text': None,
-    'salary': None,
-    'employment': None
-}
 
 processes = {}
 
@@ -94,7 +89,7 @@ def delete_saved_chat(chat_id):
 
 
 def create_process(id):
-    processes[id] = Process(target=update_vacancies, args=(id, ), daemon=True)
+    processes[id] = Process(target=send_vacancies, args=(id, ), daemon=True)
     processes[id].start()
 
 
@@ -112,52 +107,77 @@ def watchdog():
         time.sleep(10)
 
 
-def update_vacancies(id):
+def get_new_vacancies(id, max_count=50):
+    chat = session.query(databases.Chat_Table).filter(databases.Chat_Table.id == id).first()
+    if not chat or not chat.text or not chat.salary or not chat.employment:
+        return None
+
+    date_from = None if chat.last_update is None else chat.last_update.astimezone().isoformat()
+    per_page = min(max_count, 100)
+    page_count = (max_count + per_page - 1) // per_page
+
+    params = {'text': chat.text,
+              'salary': str(round(chat.salary)),
+              'employment': chat.employment,
+              'order_by': 'publication_time',
+              'per_page': per_page}
+    if date_from is not None:
+        params['date_from'] = date_from
+
+    vacs = []
+    found = 0
+    for i in range(page_count):
+        params['page'] = i
+        r = requests.get(hh_api_url, params=params)
+        e = r.json()
+        vacs += e['items']
+        found += e['found']
+    vacs = vacs[:min(max_count, found)]
+
+    chat.last_update = datetime.datetime.now().replace(microsecond=0).astimezone()
+    session.commit()
+    return vacs
+
+
+def send_vacancies(id):
+    chat_id = session.query(databases.Chat_Table)\
+                     .filter(databases.Chat_Table.id == id)\
+                     .first().chat_id
     while True:
-        chat = session.query(databases.Chat_Table).filter(databases.Chat_Table.id == id).first()
-        if not chat or not chat.text or not chat.salary or not chat.employment:
-            continue
-
-        pages = []
-        for i in range(3):
-            r = requests.get(hh_api_url, params={'text': chat.text,
-                                                 'salary': str(round(chat.salary)),
-                                                 'employment': chat.employment})
-            e = r.json()
-            pages.append(e)
-
-        for page in pages:
-            vacs = page['items']
-
-            for v in vacs:
-                try:
-                    bot.send_message(chat.chat_id, v['alternate_url'])
-                except telebot.apihelper.ApiException as e:
-                    if e.result.status_code == 403:
-                        print("Error: Chat %d was deleted by user" % chat.chat_id)
-                        return
-                    elif e.result.status_code == 409:
-                        print('Error: Webhook exception. Reset...')
-                        bot.delete_webhook()
-                        time.sleep(15)
-                        print('Done')
-                        bot.send_message(chat.chat_id, v['alternate_url'])
-                    else:
-                        print(e)
-                        return
-                except Exception as e:
+        vacs = get_new_vacancies(id)
+        if vacs is None:
+            return
+        for v in vacs:
+            try:
+                bot.send_message(chat_id, v['alternate_url'])
+            except telebot.apihelper.ApiException as e:
+                if e.result.status_code == 403:
+                    print("Error: Chat %d was deleted by user" % chat_id)
+                    return
+                elif e.result.status_code == 409:
+                    print('Error: Webhook exception. Reset...')
+                    bot.delete_webhook()
+                    time.sleep(15)
+                    print('Done')
+                    bot.send_message(chat_id, v['alternate_url'])
+                else:
                     print(e)
                     return
-                time.sleep(10)
+            except Exception as e:
+                print(e)
+                return
+            time.sleep(10)
+        time.sleep(60)
 
 
 if __name__ == '__main__':
-    wdog = Thread(target=watchdog, daemon=True)
-    wdog.start()
-
     for chat in session.query(databases.Chat_Table):
         if chat.text and chat.salary and chat.employment:
             create_process(chat.id)
+
+    time.sleep(2)
+    wdog = Thread(target=watchdog, daemon=True)
+    wdog.start()
 
     while True:
         try:
