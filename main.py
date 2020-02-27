@@ -4,6 +4,7 @@ import time
 import config
 import databases
 import datetime
+import sys
 from multiprocessing import Process
 from threading import Thread
 
@@ -102,8 +103,14 @@ def watchdog():
     while True:
         for row in session.query(databases.Chat_Table):
             if row.id in processes.keys() and not processes[row.id].is_alive():
-                delete_saved_chat(row.chat_id)
-                print('Process for chat %d was terminated. Chat was deleted.' % row.chat_id)
+                if processes[row.id].exitcode == 11:
+                    # user remove bot from chat list
+                    delete_saved_chat(row.chat_id)
+                    print('Process for chat %d was terminated. Chat in db was deleted.' % row.chat_id)
+                else:
+                    # process failed
+                    delete_process(row.id)
+                    print('Process for chat %d was terminated. Chat in db was not deleted.' % row.chat_id)
         time.sleep(10)
 
 
@@ -146,14 +153,14 @@ def send_vacancies(id):
     while True:
         vacs = get_new_vacancies(id)
         if vacs is None:
-            return
+            sys.exit(1)
         for v in vacs:
             try:
                 bot.send_message(chat_id, v['alternate_url'])
             except telebot.apihelper.ApiException as e:
                 if e.result.status_code == 403:
                     print("Error: Chat %d was deleted by user" % chat_id)
-                    return
+                    sys.exit(11)
                 elif e.result.status_code == 409:
                     print('Error: Webhook exception. Reset...')
                     bot.delete_webhook()
@@ -162,10 +169,8 @@ def send_vacancies(id):
                     bot.send_message(chat_id, v['alternate_url'])
                 else:
                     print(e)
-                    return
             except Exception as e:
                 print(e)
-                return
             time.sleep(10)
         time.sleep(60)
 
