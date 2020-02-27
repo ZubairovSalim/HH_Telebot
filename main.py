@@ -38,7 +38,7 @@ def start_message(message):
 
 
 @bot.message_handler(commands=['stop'])
-def start_message(message):
+def stop_message(message):
     delete_saved_chat(message.chat.id)
 
 
